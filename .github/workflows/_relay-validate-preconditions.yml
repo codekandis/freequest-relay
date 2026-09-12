@@ -1,0 +1,93 @@
+name: Relay – validate preconditions
+
+on:
+  workflow_call:
+    inputs:
+      ci-config-env:
+        required: true
+        type: string
+      environment-name:
+        required: true
+        type: string
+
+jobs:
+  relay-validate-preconditions:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    environment:
+      name: ${{ inputs.environment-name }}
+      deployment: false
+    env: ${{ fromJSON( inputs.ci-config-env ) }}
+
+    steps:
+      - name: Validate preconditions
+        shell: bash
+        env:
+          FREEQUEST_RELAY_GPG_PRIVATE_KEY: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY }}
+          FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD }}
+          FREEQUEST_PROXY_ENDPOINT: ${{ secrets.FREEQUEST_PROXY_ENDPOINT }}
+          FREEQUEST_PROXY_API_KEY: ${{ secrets.FREEQUEST_PROXY_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          validationFailed=false
+
+          echo "[INFO] Validating \`secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY\`."
+
+          if [[ -z "${FREEQUEST_RELAY_GPG_PRIVATE_KEY}" ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY\` must be set."
+          fi
+
+          echo "[INFO] Validating \`secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD\`."
+
+          if [[ -z "${FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD}" ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD\` must be set."
+          fi
+
+          echo "[INFO] Validating \`secrets.FREEQUEST_PROXY_ENDPOINT\`."
+
+          if [[ -z "${FREEQUEST_PROXY_ENDPOINT}" ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`secrets.FREEQUEST_PROXY_ENDPOINT\` must be set."
+          fi
+
+          echo "[INFO] Validating \`secrets.FREEQUEST_PROXY_API_KEY\`."
+
+          if [[ -z "${FREEQUEST_PROXY_API_KEY}" ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`secrets.FREEQUEST_PROXY_API_KEY\` must be set."
+          fi
+
+          echo "[INFO] Validating \`env.PROXY_REQUEST_TIMEOUT_SECONDS\`."
+
+          if [[ ! "${PROXY_REQUEST_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`env.PROXY_REQUEST_TIMEOUT_SECONDS\` must be a positive integer."
+          fi
+
+          echo "[INFO] Validating \`env.PROXY_CONTENT_TYPE\`."
+
+          if [[ -z "${PROXY_CONTENT_TYPE}" ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`env.PROXY_CONTENT_TYPE\` must be set."
+          fi
+
+          if [[ "${validationFailed}" == true ]]
+          then
+            exit 1
+          fi
