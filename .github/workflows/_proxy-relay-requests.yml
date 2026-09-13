@@ -3,25 +3,22 @@ name: Proxy – relay requests
 on:
   workflow_call:
     inputs:
+      ci-config-env:
+        required: true
+        type: string
       environment-name:
         required: true
         type: string
 
 jobs:
-  load-ci-config-env:
-    uses: ./.github/workflows/_load-ci-config-env.yml
-    permissions:
-      contents: read
-
   proxy-relay-requests:
-    needs: load-ci-config-env
     runs-on: ubuntu-latest
     permissions:
       contents: write
     environment:
       name: ${{ inputs.environment-name }}
       deployment: false
-    env: ${{ fromJSON( needs.load-ci-config-env.outputs.CI_CONFIG_ENV ) }}
+    env: ${{ fromJSON( inputs.ci-config-env ) }}
 
     steps:
       - name: Checkout trigger commit

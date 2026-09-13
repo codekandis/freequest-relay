@@ -47,15 +47,19 @@ jobs:
 
   relay-determine-concurrency-lane:
     needs:
+      - load-ci-config-env
       - determine-environment
       - relay-validate-preconditions
     if: ${{ needs.determine-environment.outputs.RELAY_ENVIRONMENT_NAME != '' }}
     uses: ./.github/workflows/_relay-determine-concurrency-lane.yml
     permissions:
       contents: read
+    with:
+      ci-config-env: ${{ needs.load-ci-config-env.outputs.CI_CONFIG_ENV }}
 
   proxy-relay-requests:
     needs:
+      - load-ci-config-env
       - relay-determine-concurrency-lane
       - determine-environment
     if: ${{ needs.determine-environment.outputs.RELAY_ENVIRONMENT_NAME != '' }}
@@ -67,4 +71,5 @@ jobs:
       contents: write
     secrets: inherit
     with:
+      ci-config-env: ${{ needs.load-ci-config-env.outputs.CI_CONFIG_ENV }}
       environment-name: ${{ needs.determine-environment.outputs.RELAY_ENVIRONMENT_NAME }}

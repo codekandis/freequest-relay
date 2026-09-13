@@ -2,22 +2,20 @@ name: Relay – determine concurrency lane
 
 on:
   workflow_call:
+    inputs:
+      ci-config-env:
+        required: true
+        type: string
     outputs:
       RELAY_CONCURRENCY_LANE:
         value: ${{ jobs.relay-determine-concurrency-lane.outputs.RELAY_CONCURRENCY_LANE }}
 
 jobs:
-  load-ci-config-env:
-    uses: ./.github/workflows/_load-ci-config-env.yml
-    permissions:
-      contents: read
-
   relay-determine-concurrency-lane:
-    needs: load-ci-config-env
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env: ${{ fromJSON( needs.load-ci-config-env.outputs.CI_CONFIG_ENV ) }}
+    env: ${{ fromJSON( inputs.ci-config-env ) }}
     outputs:
       RELAY_CONCURRENCY_LANE: ${{ steps.relay-determine-concurrency-lane.outputs.relayConcurrencyLane }}
 
