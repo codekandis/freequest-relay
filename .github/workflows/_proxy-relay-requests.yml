@@ -1,0 +1,363 @@
+name: Proxy – relay requests
+
+on:
+  workflow_call:
+    inputs:
+      environment-name:
+        required: true
+        type: string
+
+jobs:
+  load-ci-config-env:
+    uses: ./.github/workflows/_load-ci-config-env.yml
+    permissions:
+      contents: read
+
+  proxy-relay-requests:
+    needs: load-ci-config-env
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    environment:
+      name: ${{ inputs.environment-name }}
+      deployment: false
+    env: ${{ fromJSON( needs.load-ci-config-env.outputs.CI_CONFIG_ENV ) }}
+
+    steps:
+      - name: Checkout trigger commit
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Configure result commit signing
+        id: configure-result-commit-signing
+        shell: bash
+        env:
+          FREEQUEST_RELAY_GPG_PRIVATE_KEY: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$( stat --file-system --format %T /dev/shm )" != tmpfs ]]
+          then
+            echo "[CRITICAL] `/dev/shm` must be a tmpfs"
+
+            exit 1
+          fi
+
+          gpgHomePath="$( mktemp -d "/dev/shm/freequest-relay-gpg.XXXXXX" )"
+          gpgWrapperPath="${RUNNER_TEMP}/freequest-relay-gpg-wrapper"
+
+          echo "gpgHomePath=${gpgHomePath}" >> "${GITHUB_OUTPUT}"
+          echo "gpgWrapperPath=${gpgWrapperPath}" >> "${GITHUB_OUTPUT}"
+
+          export GNUPGHOME="${gpgHomePath}"
+
+          printf '%s' "${FREEQUEST_RELAY_GPG_PRIVATE_KEY}" | gpg --batch --import
+
+          mapfile -t signingKeyFingerprints < <(
+            gpg --batch --with-colons --list-secret-keys \
+              | awk -F ':' '
+                $1 == "sec" {
+                  isPrimarySecretKey = 1
+
+                  next
+                }
+
+                isPrimarySecretKey && $1 == "fpr" {
+                  print $10
+
+                  exit
+                }
+              '
+          )
+
+          if [[ "${#signingKeyFingerprints[@]}" -ne 1 ]]
+          then
+            echo "[CRITICAL] signing key must contain exactly 1 secret key"
+
+            exit 1
+          fi
+
+          signingKeyFingerprint="${signingKeyFingerprints[0]}"
+          signingKeyEmail="$(
+            gpg --batch --with-colons --list-secret-keys "${signingKeyFingerprint}" \
+              | awk -F ':' '$1 == "uid" { sub(/^.*</, "", $10); sub(/>.*$/, "", $10); print $10; exit }'
+          )"
+
+          if [[ -z "${signingKeyEmail}" ]] || [[ "${signingKeyEmail}" == *"<"* ]] || [[ "${signingKeyEmail}" == *">"* ]]
+          then
+            echo "[CRITICAL] signing key must contain an email address"
+
+            exit 1
+          fi
+
+          gpgWrapperCommand="exec gpg --batch --homedir \"${gpgHomePath}\" --pinentry-mode loopback "
+          gpgWrapperCommand+="--passphrase-fd 3 \"\${@}\""
+
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'exec 3<<< "${FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD}"' \
+            "${gpgWrapperCommand}" \
+            > "${gpgWrapperPath}"
+          chmod 0700 "${gpgWrapperPath}"
+
+          git config user.name "Freequest Relay"
+          git config user.email "${signingKeyEmail}"
+          git config user.signingkey "${signingKeyFingerprint}"
+          git config gpg.program "${gpgWrapperPath}"
+          git config commit.gpgsign true
+
+      - name: Relay proxy requests
+        shell: bash
+        env:
+          FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD }}
+          FREEQUEST_PROXY_ENDPOINT: ${{ secrets.FREEQUEST_PROXY_ENDPOINT }}
+          FREEQUEST_PROXY_API_KEY: ${{ secrets.FREEQUEST_PROXY_API_KEY }}
+          GITHUB_WORKFLOW_RUN_ID: ${{github.run_id}}.${{github.run_attempt}}
+        run: |
+          set -euo pipefail
+
+          commitRelayRecords()
+          {
+            local requestPath="${1}"
+            local requestLogMessages="${2}"
+            local responsePath="${3}"
+            local logPath="${requestPath%.request}.log"
+            local logPathIsTracked=false
+            local responsePathIsTracked=false
+            local commitAddedPaths=""
+            local commitUpdatedPaths=""
+            local commitMessageBody=""
+            local commitMessageSubject=""
+
+            if git ls-files --error-unmatch -- "${logPath}" > /dev/null 2>&1
+            then
+              logPathIsTracked=true
+            fi
+
+            if [[ -n "${responsePath}" ]]
+            then
+              if git ls-files --error-unmatch -- "${responsePath}" > /dev/null 2>&1
+              then
+                responsePathIsTracked=true
+              fi
+            fi
+
+            if [[ "${logPathIsTracked}" == true ]]
+            then
+              commitUpdatedPaths+="  * \`${logPath}\`"$'\n'
+            else
+              commitAddedPaths+="  * \`${logPath}\`"$'\n'
+            fi
+
+            printf '%s' "${requestLogMessages}" >> "${logPath}"
+            git add -- "${logPath}"
+
+            if [[ -n "${responsePath}" ]]
+            then
+              if [[ "${responsePathIsTracked}" == true ]]
+              then
+                commitUpdatedPaths+="  * \`${responsePath}\`"$'\n'
+              else
+                commitAddedPaths+="  * \`${responsePath}\`"$'\n'
+              fi
+
+              git add -- "${responsePath}"
+            fi
+
+            if [[ -n "${commitAddedPaths}" ]]
+            then
+              commitMessageBody+="* adds"$'\n'"${commitAddedPaths}"
+            fi
+
+            if [[ -n "${commitUpdatedPaths}" ]]
+            then
+              commitMessageBody+="* updates"$'\n'"${commitUpdatedPaths}"
+              commitMessageSubject="Updates relay records for \`${requestPath}\`"
+            else
+              commitMessageSubject="Adds relay records for \`${requestPath}\`"
+            fi
+
+            git commit -S \
+              -m "${commitMessageSubject}" \
+              -m "${commitMessageBody}"
+            git verify-commit HEAD
+            git push origin "HEAD:${GITHUB_REF}"
+          }
+
+          beforeSha="${{ github.event.before }}"
+          shortBeforeSha="$( git rev-parse --short=7 "${beforeSha}" )"
+
+          afterSha="${GITHUB_SHA}"
+          shortAfterSha="$( git rev-parse --short=7 "${afterSha}" )"
+
+          pushedCommitCount="$( git rev-list --count "${beforeSha}..${afterSha}" )"
+
+          if [[ "${pushedCommitCount}" -ne 1 ]]
+          then
+            echo "[CRITICAL] ${GITHUB_REF_NAME}(${shortBeforeSha}..${shortAfterSha}): 1 commit expected, \`${pushedCommitCount}\` given"
+
+            exit 1
+          fi
+
+          pushedCommitSha="${afterSha}"
+          shortPushedCommitSha="$( git rev-parse --short=7 "${pushedCommitSha}" )"
+
+          declare -A requestApprovalStates=()
+
+          echo "[INFO] ${GITHUB_REF_NAME}(${shortBeforeSha}..${shortAfterSha}): determining requests"
+
+          mapfile -d '' -t requestChanges < <(
+            git diff --no-renames --name-status -z "${beforeSha}" "${afterSha}" -- 'proxy/*.request'
+          )
+
+          for (( requestChangeIndex = 0; requestChangeIndex < ${#requestChanges[@]}; requestChangeIndex += 2 ))
+          do
+            requestChangeStatus="${requestChanges[requestChangeIndex]}"
+            requestPath="${requestChanges[requestChangeIndex + 1]}"
+
+            requestApprovalState=false
+            isRegularFile=true
+
+            requestChangeMessage="${shortPushedCommitSha}: ${requestPath} - flagged \`${requestChangeStatus}\`"
+            addLogMessage=false
+
+            if [[ ! -f "${requestPath}" ]] || [[ -L "${requestPath}" ]]
+            then
+              isRegularFile=false
+            fi
+
+            if [[ "${requestChangeStatus}" != "D" ]]
+            then
+              addLogMessage=true
+              logMessage="[FAILURE] ${requestChangeMessage}"
+            fi
+
+            if [[ "${addLogMessage}" == true ]] && [[ "${isRegularFile}" == false ]]
+            then
+              requestChangeMessage="${shortPushedCommitSha}: ${requestPath} - not a regular file"
+              logMessage="[FAILURE] ${requestChangeMessage}"
+            fi
+
+            if [[ "${addLogMessage}" == true ]] && [[ "${isRegularFile}" == true ]] \
+              && [[ "${requestChangeStatus}" == "A" ]]
+            then
+              requestApprovalState=true
+              logMessage="[INFO] ${requestChangeMessage}"
+            fi
+
+            if [[ "${addLogMessage}" == true ]]
+            then
+              requestApprovalStates["${requestPath}"]="${requestApprovalState}"$'\n'"${logMessage}"$'\n'
+
+              echo "${logMessage}"
+            fi
+
+          done
+
+          if [[ "${#requestApprovalStates[@]}" -eq 0 ]]
+          then
+            echo "[INFO] ${GITHUB_REF_NAME}(${shortBeforeSha}..${shortAfterSha}): no requests found"
+
+            exit 0
+          fi
+
+          while IFS= read -r -d '' requestPath
+          do
+            responsePath="${requestPath%.request}.response"
+
+            requestApprovalState="${requestApprovalStates["${requestPath}"]%%$'\n'*}"
+            requestLogMessages="[ID] ${GITHUB_WORKFLOW_RUN_ID}"$'\n'"${requestApprovalStates["${requestPath}"]#*$'\n'}"
+
+            if [[ "${requestApprovalState}" == "false" ]]
+            then
+              commitRelayRecords "${requestPath}" "${requestLogMessages}" ""
+
+              continue
+            fi
+
+            temporaryResponsePath="$( mktemp "${RUNNER_TEMP}/freequest-proxy.response.XXXXXX" )"
+
+            set +e
+
+            curlOutput="$(
+              curl \
+                --silent \
+                --show-error \
+                --max-time "${PROXY_REQUEST_TIMEOUT_SECONDS}" \
+                --request POST \
+                --header "Authorization: ApiKey ${FREEQUEST_PROXY_API_KEY}" \
+                --header "Content-Type: ${PROXY_CONTENT_TYPE}" \
+                --header "Content-Length: $( wc -c < "${requestPath}" )" \
+                --data-binary "@${requestPath}" \
+                --output "${temporaryResponsePath}" \
+                --write-out $'\n%{http_code}' \
+                "${FREEQUEST_PROXY_ENDPOINT}" \
+                2>&1
+            )"
+
+            curlExitCode=${?}
+
+            set -e
+
+            curlErrorOutput="${curlOutput%$'\n'*}"
+
+            if [[ "${curlExitCode}" -ne 0 ]]
+            then
+              rm -f -- "${temporaryResponsePath}"
+              logMessage="[ERROR] ${shortPushedCommitSha}: ${requestPath} - curl exited with \`${curlExitCode}\`"
+
+              if [[ -n "${curlErrorOutput}" ]]
+              then
+                logMessage+=" - ${curlErrorOutput}"
+              fi
+
+              requestLogMessages+="${logMessage}"$'\n'
+              echo "${logMessage}"
+
+              commitRelayRecords "${requestPath}" "${requestLogMessages}" ""
+
+              continue
+            fi
+
+            httpStatus="${curlOutput##*$'\n'}"
+
+            mv -- "${temporaryResponsePath}" "${responsePath}"
+
+            if [[ "${httpStatus}" =~ ^2[0-9]{2}$ ]]
+            then
+              logMessagePrefix="[INFO]"
+            fi
+
+            if [[ ! "${httpStatus}" =~ ^2[0-9]{2}$ ]]
+            then
+              logMessagePrefix="[ERROR]"
+            fi
+
+            logMessage="${logMessagePrefix} ${shortPushedCommitSha}: ${requestPath} - HTTP \`${httpStatus}\`"
+            requestLogMessages+="${logMessage}"$'\n'
+            echo "${logMessage}"
+
+            commitRelayRecords "${requestPath}" "${requestLogMessages}" "${responsePath}"
+          done < <(
+            printf '%s\0' "${!requestApprovalStates[@]}"
+          )
+
+      - name: Clean up temporary signing files
+        if: ${{ always() }}
+        shell: bash
+        env:
+          GPG_HOME_PATH: ${{ steps.configure-result-commit-signing.outputs.gpgHomePath }}
+          GPG_WRAPPER_PATH: ${{ steps.configure-result-commit-signing.outputs.gpgWrapperPath }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${GPG_WRAPPER_PATH}" ]]
+          then
+            rm -f -- "${GPG_WRAPPER_PATH}"
+          fi
+
+          if [[ -n "${GPG_HOME_PATH}" ]]
+          then
+            rm -rf -- "${GPG_HOME_PATH}"
+          fi
