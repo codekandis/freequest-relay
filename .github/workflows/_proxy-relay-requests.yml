@@ -206,11 +206,11 @@ jobs:
 
             if [[ -n "${responsePath}" ]]
             then
-              if [[ "${responsePathIsTracked}" == true ]]
+              if [[ "${responsePathIsTracked}" == false ]]
               then
-                commitUpdatedPaths+="  * \`${responsePath}\`"$'\n'
-              else
                 commitAddedPaths+="  * \`${responsePath}\`"$'\n'
+              else
+                commitUpdatedPaths+="  * \`${responsePath}\`"$'\n'
               fi
 
               if ! git add -- "${responsePath}"

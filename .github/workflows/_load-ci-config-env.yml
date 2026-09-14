@@ -40,6 +40,14 @@ jobs:
           else
             jsonMap="$(
               jq -r -c '
+                def normalizeEnvValue:
+                  if type == "array" or type == "object"
+                  then
+                    tojson
+                  else
+                    ( select( . != null ) | tostring ) // ""
+                  end;
+
                 map(
                   {
                     key: (
@@ -49,23 +57,8 @@ jobs:
                       | gsub( "[^A-Z0-9_]"; "_" )
                     ),
                     value: (
-                      if ( .value | type ) == "array" or ( .value | type ) == "object"
-                      then
-                      (
-                        .value | tojson
-                      )
-                      else
-                      (
-                        if .value == null
-                        then
-                          ""
-                        else
-                          (
-                            .value | tostring
-                          )
-                        end
-                      )
-                      end
+                      .value
+                      | normalizeEnvValue
                     )
                   }
                 )
