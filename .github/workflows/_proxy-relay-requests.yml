@@ -28,19 +28,34 @@ jobs:
 
     steps:
       - name: Checkout trigger commit
+        id: checkout-trigger-commit
+        continue-on-error: true
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Configure result commit signing
         id: configure-result-commit-signing
+        if: ${{ steps.checkout-trigger-commit.outcome == 'success' }}
+        continue-on-error: true
         shell: bash
         env:
           FREEQUEST_RELAY_GPG_PRIVATE_KEY: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY }}
           SIGNING_KEY_FINGERPRINT: ${{ inputs.signing-key-fingerprint }}
           SIGNING_KEY_EMAIL: ${{ inputs.signing-key-email }}
         run: |
-          set -euo pipefail
+          set -euoE pipefail
+
+          reportUnexpectedError()
+          {
+            local exitCode="${?}"
+
+            echo "[CRITICAL] Configuring result commit signing failed with exit code \`${exitCode}\`." >&2
+
+            exit "${exitCode}"
+          }
+
+          trap reportUnexpectedError ERR
 
           if [[ "$( stat --file-system --format %T /dev/shm )" != tmpfs ]]
           then
@@ -76,6 +91,9 @@ jobs:
           git config commit.gpgsign true
 
       - name: Relay proxy requests
+        id: relay-proxy-requests
+        if: ${{ steps.checkout-trigger-commit.outcome == 'success' && steps.configure-result-commit-signing.outcome == 'success' }}
+        continue-on-error: true
         shell: bash
         env:
           FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD }}
@@ -83,7 +101,18 @@ jobs:
           FREEQUEST_PROXY_API_KEY: ${{ secrets.FREEQUEST_PROXY_API_KEY }}
           GITHUB_WORKFLOW_RUN_ID: ${{github.run_id}}.${{github.run_attempt}}
         run: |
-          set -euo pipefail
+          set -euoE pipefail
+
+          reportUnexpectedError()
+          {
+            local exitCode="${?}"
+
+            echo "[CRITICAL] Relay proxy requests failed with exit code \`${exitCode}\`." >&2
+
+            exit "${exitCode}"
+          }
+
+          trap reportUnexpectedError ERR
 
           commitRelayRecords()
           {
@@ -249,6 +278,7 @@ jobs:
 
             temporaryResponsePath="$( mktemp "${RUNNER_TEMP}/freequest-proxy.response.XXXXXX" )"
 
+            trap - ERR
             set +e
 
             curlOutput="$(
@@ -270,6 +300,7 @@ jobs:
             curlExitCode=${?}
 
             set -e
+            trap reportUnexpectedError ERR
 
             curlErrorOutput="${curlOutput%$'\n'*}"
 
@@ -315,13 +346,26 @@ jobs:
           )
 
       - name: Clean up temporary signing files
+        id: clean-up-temporary-signing-files
         if: ${{ always() }}
+        continue-on-error: true
         shell: bash
         env:
           GPG_HOME_PATH: ${{ steps.configure-result-commit-signing.outputs.gpgHomePath }}
           GPG_WRAPPER_PATH: ${{ steps.configure-result-commit-signing.outputs.gpgWrapperPath }}
         run: |
-          set -euo pipefail
+          set -euoE pipefail
+
+          reportUnexpectedError()
+          {
+            local exitCode="${?}"
+
+            echo "[CRITICAL] Cleaning up temporary signing files failed with exit code \`${exitCode}\`." >&2
+
+            exit "${exitCode}"
+          }
+
+          trap reportUnexpectedError ERR
 
           if [[ -n "${GPG_WRAPPER_PATH}" ]]
           then
@@ -331,4 +375,25 @@ jobs:
           if [[ -n "${GPG_HOME_PATH}" ]]
           then
             rm -rf -- "${GPG_HOME_PATH}"
+          fi
+
+      - name: Fail on unexpected error
+        if: ${{ always() }}
+        shell: bash
+        env:
+          CHECKOUT_TRIGGER_COMMIT_OUTCOME: ${{ steps.checkout-trigger-commit.outcome }}
+          RESULT_COMMIT_SIGNING_CONFIGURATION_OUTCOME: ${{ steps.configure-result-commit-signing.outcome }}
+          PROXY_REQUEST_RELAY_OUTCOME: ${{ steps.relay-proxy-requests.outcome }}
+          TEMPORARY_SIGNING_FILE_CLEANUP_OUTCOME: ${{ steps.clean-up-temporary-signing-files.outcome }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${CHECKOUT_TRIGGER_COMMIT_OUTCOME}" == failure ]] \
+            || [[ "${RESULT_COMMIT_SIGNING_CONFIGURATION_OUTCOME}" == failure ]] \
+            || [[ "${PROXY_REQUEST_RELAY_OUTCOME}" == failure ]] \
+            || [[ "${TEMPORARY_SIGNING_FILE_CLEANUP_OUTCOME}" == failure ]]
+          then
+            echo "[CRITICAL] An unexpected error occured."
+
+            exit 1
           fi
