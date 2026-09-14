@@ -9,6 +9,12 @@ on:
       environment-name:
         required: true
         type: string
+      signing-key-fingerprint:
+        required: true
+        type: string
+      signing-key-email:
+        required: true
+        type: string
 
 jobs:
   proxy-relay-requests:
@@ -31,6 +37,8 @@ jobs:
         shell: bash
         env:
           FREEQUEST_RELAY_GPG_PRIVATE_KEY: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY }}
+          SIGNING_KEY_FINGERPRINT: ${{ inputs.signing-key-fingerprint }}
+          SIGNING_KEY_EMAIL: ${{ inputs.signing-key-email }}
         run: |
           set -euo pipefail
 
@@ -51,43 +59,6 @@ jobs:
 
           printf '%s' "${FREEQUEST_RELAY_GPG_PRIVATE_KEY}" | gpg --batch --import
 
-          mapfile -t signingKeyFingerprints < <(
-            gpg --batch --with-colons --list-secret-keys \
-              | awk -F ':' '
-                $1 == "sec" {
-                  isPrimarySecretKey = 1
-
-                  next
-                }
-
-                isPrimarySecretKey && $1 == "fpr" {
-                  print $10
-
-                  exit
-                }
-              '
-          )
-
-          if [[ "${#signingKeyFingerprints[@]}" -ne 1 ]]
-          then
-            echo "[CRITICAL] signing key must contain exactly 1 secret key"
-
-            exit 1
-          fi
-
-          signingKeyFingerprint="${signingKeyFingerprints[0]}"
-          signingKeyEmail="$(
-            gpg --batch --with-colons --list-secret-keys "${signingKeyFingerprint}" \
-              | awk -F ':' '$1 == "uid" { sub(/^.*</, "", $10); sub(/>.*$/, "", $10); print $10; exit }'
-          )"
-
-          if [[ -z "${signingKeyEmail}" ]] || [[ "${signingKeyEmail}" == *"<"* ]] || [[ "${signingKeyEmail}" == *">"* ]]
-          then
-            echo "[CRITICAL] signing key must contain an email address"
-
-            exit 1
-          fi
-
           gpgWrapperCommand="exec gpg --batch --homedir \"${gpgHomePath}\" --pinentry-mode loopback "
           gpgWrapperCommand+="--passphrase-fd 3 \"\${@}\""
 
@@ -99,8 +70,8 @@ jobs:
           chmod 0700 "${gpgWrapperPath}"
 
           git config user.name "Freequest Relay"
-          git config user.email "${signingKeyEmail}"
-          git config user.signingkey "${signingKeyFingerprint}"
+          git config user.email "${SIGNING_KEY_EMAIL}"
+          git config user.signingkey "${SIGNING_KEY_FINGERPRINT}"
           git config gpg.program "${gpgWrapperPath}"
           git config commit.gpgsign true
 

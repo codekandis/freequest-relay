@@ -62,6 +62,7 @@ jobs:
       - load-ci-config-env
       - relay-determine-concurrency-lane
       - determine-environment
+      - relay-validate-preconditions
     if: ${{ needs.determine-environment.outputs.RELAY_ENVIRONMENT_NAME != '' }}
     concurrency:
       group: relay-${{ needs.relay-determine-concurrency-lane.outputs.RELAY_CONCURRENCY_LANE }}
@@ -73,3 +74,5 @@ jobs:
     with:
       ci-config-env: ${{ needs.load-ci-config-env.outputs.CI_CONFIG_ENV }}
       environment-name: ${{ needs.determine-environment.outputs.RELAY_ENVIRONMENT_NAME }}
+      signing-key-fingerprint: ${{ needs.relay-validate-preconditions.outputs.SIGNING_KEY_FINGERPRINT }}
+      signing-key-email: ${{ needs.relay-validate-preconditions.outputs.SIGNING_KEY_EMAIL }}

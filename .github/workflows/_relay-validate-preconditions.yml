@@ -133,17 +133,109 @@ jobs:
             exit 1
           fi
 
+      - name: Validate GPG signing key
+        id: relay-validate-gpg-signing-key
+        if: ${{ always() }}
+        continue-on-error: true
+        shell: bash
+        env:
+          FREEQUEST_RELAY_GPG_PRIVATE_KEY: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY }}
+          FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${FREEQUEST_RELAY_GPG_PRIVATE_KEY}" ]] \
+            || [[ -z "${FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD}" ]]
+          then
+            exit 0
+          fi
+
+          signingKeyMetadata=""
+          signingKeyFingerprint=""
+          signingKeyFingerprintCount=0
+          signingKeyEmail=""
+
+          echo "[INFO] Validating GPG signing key."
+
+          if ! signingKeyMetadata="$(
+            printf '%s' "${FREEQUEST_RELAY_GPG_PRIVATE_KEY}" \
+              | gpg --batch --with-colons --import-options show-only --dry-run --import
+          )"
+          then
+            echo "[CRITICAL] GPG signing key must be importable."
+
+            exit 1
+          fi
+
+          signingKeyFingerprintCount="$(
+            awk -F ':' '
+              $1 == "sec" {
+                isPrimarySecretKey = 1
+
+                next
+              }
+
+              isPrimarySecretKey && $1 == "fpr" {
+                signingKeyFingerprintCount += 1
+                isPrimarySecretKey = 0
+              }
+
+              END {
+                print signingKeyFingerprintCount
+              }
+            ' <<< "${signingKeyMetadata}"
+          )"
+
+          if [[ "${signingKeyFingerprintCount}" != 1 ]]
+          then
+            echo "[CRITICAL] GPG signing key must contain exactly 1 secret key."
+
+            exit 1
+          fi
+
+          signingKeyFingerprint="$(
+            awk -F ':' '
+              $1 == "sec" {
+                isPrimarySecretKey = 1
+
+                next
+              }
+
+              isPrimarySecretKey && $1 == "fpr" {
+                print $10
+
+                exit
+              }
+            ' <<< "${signingKeyMetadata}"
+          )"
+          signingKeyEmail="$(
+            awk -F ':' '$1 == "uid" { sub(/^.*</, "", $10); sub(/>.*$/, "", $10); print $10; exit }' \
+              <<< "${signingKeyMetadata}"
+          )"
+
+          if [[ ! "${signingKeyEmail}" =~ ^[[:alnum:]_%+-]+(\.[[:alnum:]_%+-]+)*@[[:alnum:]]([[:alnum:]-]*[[:alnum:]])?(\.[[:alnum:]]([[:alnum:]-]*[[:alnum:]])?)*$ ]]
+          then
+            echo "[CRITICAL] GPG signing key must contain an email address."
+
+            exit 1
+          fi
+
+          echo "signingKeyFingerprint=${signingKeyFingerprint}" >> "${GITHUB_OUTPUT}"
+          echo "signingKeyEmail=${signingKeyEmail}" >> "${GITHUB_OUTPUT}"
+
       - name: Fail invalid preconditions
         if: ${{ always() }}
         shell: bash
         env:
           SECRETS_VALIDATION_OUTCOME: ${{ steps.relay-validate-secrets.outcome }}
           CONFIGURATION_VALIDATION_OUTCOME: ${{ steps.relay-validate-configuration.outcome }}
+          GPG_SIGNING_KEY_VALIDATION_OUTCOME: ${{ steps.relay-validate-gpg-signing-key.outcome }}
         run: |
           set -euo pipefail
 
           if [[ "${SECRETS_VALIDATION_OUTCOME}" == failure ]] \
-            || [[ "${CONFIGURATION_VALIDATION_OUTCOME}" == failure ]]
+            || [[ "${CONFIGURATION_VALIDATION_OUTCOME}" == failure ]] \
+            || [[ "${GPG_SIGNING_KEY_VALIDATION_OUTCOME}" == failure ]]
           then
             exit 1
           fi
