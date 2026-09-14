@@ -60,6 +60,14 @@ jobs:
             echo "[CRITICAL] \`secrets.FREEQUEST_PROXY_ENDPOINT\` must be set."
           fi
 
+          if [[ -n "${FREEQUEST_PROXY_ENDPOINT}" ]] \
+            && [[ ! "${FREEQUEST_PROXY_ENDPOINT}" =~ ^[[:alpha:]][[:alnum:]+.-]*://(\[[[:xdigit:]:.]+\]|[^[:space:]/:?#]+)(:[0-9]+)?([/?#][^[:space:]]*)?$ ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`secrets.FREEQUEST_PROXY_ENDPOINT\` must be a valid endpoint."
+          fi
+
           echo "[INFO] Validating \`secrets.FREEQUEST_PROXY_API_KEY\`."
 
           if [[ -z "${FREEQUEST_PROXY_API_KEY}" ]]
