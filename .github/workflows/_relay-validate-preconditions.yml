@@ -157,15 +157,14 @@ jobs:
 
           echo "[INFO] Validating GPG signing key."
 
-          if ! signingKeyMetadata="$(
-            printf '%s' "${FREEQUEST_RELAY_GPG_PRIVATE_KEY}" \
-              | gpg --batch --with-colons --import-options show-only --dry-run --import
-          )"
+          if ! printf '%s' "${FREEQUEST_RELAY_GPG_PRIVATE_KEY}" | gpg --batch --import
           then
             echo "[CRITICAL] GPG signing key must be importable."
 
             exit 1
           fi
+
+          signingKeyMetadata="$( gpg --batch --with-colons --list-secret-keys )"
 
           signingKeyFingerprintCount="$(
             awk -F ':' '
