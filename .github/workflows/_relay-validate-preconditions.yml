@@ -9,6 +9,11 @@ on:
       environment-name:
         required: true
         type: string
+    outputs:
+      SIGNING_KEY_FINGERPRINT:
+        value: ${{ jobs.relay-validate-preconditions.outputs.SIGNING_KEY_FINGERPRINT }}
+      SIGNING_KEY_EMAIL:
+        value: ${{ jobs.relay-validate-preconditions.outputs.SIGNING_KEY_EMAIL }}
 
 jobs:
   relay-validate-preconditions:
@@ -19,9 +24,14 @@ jobs:
       name: ${{ inputs.environment-name }}
       deployment: false
     env: ${{ fromJSON( inputs.ci-config-env ) }}
+    outputs:
+      SIGNING_KEY_FINGERPRINT: ${{ steps.relay-validate-gpg-signing-key.outputs.signingKeyFingerprint }}
+      SIGNING_KEY_EMAIL: ${{ steps.relay-validate-gpg-signing-key.outputs.signingKeyEmail }}
 
     steps:
-      - name: Validate preconditions
+      - name: Validate secrets
+        id: relay-validate-secrets
+        continue-on-error: true
         shell: bash
         env:
           FREEQUEST_RELAY_GPG_PRIVATE_KEY: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY }}
@@ -77,6 +87,20 @@ jobs:
             echo "[CRITICAL] \`secrets.FREEQUEST_PROXY_API_KEY\` must be set."
           fi
 
+          if [[ "${validationFailed}" == true ]]
+          then
+            exit 1
+          fi
+
+      - name: Validate configuration
+        id: relay-validate-configuration
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          validationFailed=false
+
           echo "[INFO] Validating \`env.RELAY_MAX_CONCURRENT_WORKFLOWS\`."
 
           if [[ ! "${RELAY_MAX_CONCURRENT_WORKFLOWS}" =~ ^[1-9][0-9]*$ ]]
@@ -105,6 +129,21 @@ jobs:
           fi
 
           if [[ "${validationFailed}" == true ]]
+          then
+            exit 1
+          fi
+
+      - name: Fail invalid preconditions
+        if: ${{ always() }}
+        shell: bash
+        env:
+          SECRETS_VALIDATION_OUTCOME: ${{ steps.relay-validate-secrets.outcome }}
+          CONFIGURATION_VALIDATION_OUTCOME: ${{ steps.relay-validate-configuration.outcome }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${SECRETS_VALIDATION_OUTCOME}" == failure ]] \
+            || [[ "${CONFIGURATION_VALIDATION_OUTCOME}" == failure ]]
           then
             exit 1
           fi
