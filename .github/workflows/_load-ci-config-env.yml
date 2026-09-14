@@ -32,7 +32,9 @@ jobs:
 
           jsonEntries="$( yq -o=json '. | to_entries' ${CI_CONFIG_ENV_PATH} )"
 
-          if [[ -z "${jsonEntries}" ]] || [[ "${jsonEntries}" == "null" ]] || [[ "${jsonEntries}" == "[]" ]]
+          if [[ -z "${jsonEntries}" ]] \
+            || [[ "${jsonEntries}" == "null" ]] \
+            || [[ "${jsonEntries}" == "[]" ]]
           then
             jsonMap="{}"
           else

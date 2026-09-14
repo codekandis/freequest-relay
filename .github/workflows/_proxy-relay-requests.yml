@@ -50,9 +50,9 @@ jobs:
           fi
 
           gpgHomePath="$( mktemp -d "/dev/shm/freequest-relay-gpg.XXXXXX" )"
-          gpgWrapperPath="${RUNNER_TEMP}/freequest-relay-gpg-wrapper"
-
           echo "gpgHomePath=${gpgHomePath}" >> "${GITHUB_OUTPUT}"
+
+          gpgWrapperPath="${RUNNER_TEMP}/freequest-relay-gpg-wrapper"
           echo "gpgWrapperPath=${gpgWrapperPath}" >> "${GITHUB_OUTPUT}"
 
           export GNUPGHOME="${gpgHomePath}"
@@ -190,7 +190,8 @@ jobs:
             requestChangeMessage="${shortPushedCommitSha}: ${requestPath} - flagged \`${requestChangeStatus}\`"
             addLogMessage=false
 
-            if [[ ! -f "${requestPath}" ]] || [[ -L "${requestPath}" ]]
+            if [[ ! -f "${requestPath}" ]] \
+              || [[ -L "${requestPath}" ]]
             then
               isRegularFile=false
             fi
@@ -201,13 +202,15 @@ jobs:
               logMessage="[FAILURE] ${requestChangeMessage}"
             fi
 
-            if [[ "${addLogMessage}" == true ]] && [[ "${isRegularFile}" == false ]]
+            if [[ "${addLogMessage}" == true ]] \
+              && [[ "${isRegularFile}" == false ]]
             then
               requestChangeMessage="${shortPushedCommitSha}: ${requestPath} - not a regular file"
               logMessage="[FAILURE] ${requestChangeMessage}"
             fi
 
-            if [[ "${addLogMessage}" == true ]] && [[ "${isRegularFile}" == true ]] \
+            if [[ "${addLogMessage}" == true ]] \
+              && [[ "${isRegularFile}" == true ]] \
               && [[ "${requestChangeStatus}" == "A" ]]
             then
               requestApprovalState=true
