@@ -64,7 +64,13 @@ jobs:
             exit 1
           fi
 
-          gpgHomePath="$( mktemp -d "/dev/shm/freequest-relay-gpg.XXXXXX" )"
+          if ! gpgHomePath="$( mktemp -d "/dev/shm/freequest-relay-gpg.XXXXXX" )"
+          then
+            echo "[CRITICAL] GPG home could not be created in \`/dev/shm\`."
+
+            exit 1
+          fi
+
           echo "gpgHomePath=${gpgHomePath}" >> "${GITHUB_OUTPUT}"
 
           gpgWrapperPath="${RUNNER_TEMP}/freequest-relay-gpg-wrapper"
@@ -72,23 +78,42 @@ jobs:
 
           export GNUPGHOME="${gpgHomePath}"
 
-          printf '%s' "${FREEQUEST_RELAY_GPG_PRIVATE_KEY}" | gpg --batch --import
+          if ! printf '%s' "${FREEQUEST_RELAY_GPG_PRIVATE_KEY}" | gpg --batch --import
+          then
+            echo "[CRITICAL] GPG private key could not be imported."
+
+            exit 1
+          fi
 
           gpgWrapperCommand="exec gpg --batch --homedir \"${gpgHomePath}\" --pinentry-mode loopback "
           gpgWrapperCommand+="--passphrase-fd 3 \"\${@}\""
 
-          printf '%s\n' \
-            '#!/usr/bin/env bash' \
-            'exec 3<<< "${FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD}"' \
-            "${gpgWrapperCommand}" \
-            > "${gpgWrapperPath}"
-          chmod 0700 "${gpgWrapperPath}"
+          if ! {
+            printf '%s\n' \
+              '#!/usr/bin/env bash' \
+              'exec 3<<< "${FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD}"' \
+              "${gpgWrapperCommand}" \
+              > "${gpgWrapperPath}"
+            chmod 0700 "${gpgWrapperPath}"
+          }
+          then
+            echo "[CRITICAL] GPG wrapper script could not be configured."
 
-          git config user.name "Freequest Relay"
-          git config user.email "${SIGNING_KEY_EMAIL}"
-          git config user.signingkey "${SIGNING_KEY_FINGERPRINT}"
-          git config gpg.program "${gpgWrapperPath}"
-          git config commit.gpgsign true
+            exit 1
+          fi
+
+          if ! {
+            git config user.name "Freequest Relay"
+            git config user.email "${SIGNING_KEY_EMAIL}"
+            git config user.signingkey "${SIGNING_KEY_FINGERPRINT}"
+            git config gpg.program "${gpgWrapperPath}"
+            git config commit.gpgsign true
+          }
+          then
+            echo "[CRITICAL] Git commit signing could not be configured."
+
+            exit 1
+          fi
 
       - name: Relay proxy requests
         id: relay-proxy-requests
@@ -127,17 +152,39 @@ jobs:
             local commitMessageBody=""
             local commitMessageSubject=""
 
+            local gitLsFilesExitCode=0
+
             if git ls-files --error-unmatch -- "${logPath}" > /dev/null 2>&1
             then
               logPathIsTracked=true
+            else
+              gitLsFilesExitCode=${?}
             fi
 
-            if [[ -n "${responsePath}" ]]
+            if [[ "${gitLsFilesExitCode}" -ne 0 ]] \
+              && [[ "${gitLsFilesExitCode}" -ne 1 ]]
             then
-              if git ls-files --error-unmatch -- "${responsePath}" > /dev/null 2>&1
-              then
-                responsePathIsTracked=true
-              fi
+              echo "[CRITICAL] \`${logPath}\` tracking status could not be determined."
+
+              exit 1
+            fi
+
+            gitLsFilesExitCode=0
+
+            if [[ -n "${responsePath}" ]] \
+              && git ls-files --error-unmatch -- "${responsePath}" > /dev/null 2>&1
+            then
+              responsePathIsTracked=true
+            else
+              gitLsFilesExitCode=${?}
+            fi
+
+            if [[ "${gitLsFilesExitCode}" -ne 0 ]] \
+              && [[ "${gitLsFilesExitCode}" -ne 1 ]]
+            then
+              echo "[CRITICAL] \`${responsePath}\` tracking status could not be determined."
+
+              exit 1
             fi
 
             if [[ "${logPathIsTracked}" == true ]]
@@ -147,8 +194,15 @@ jobs:
               commitAddedPaths+="  * \`${logPath}\`"$'\n'
             fi
 
-            printf '%s' "${requestLogMessages}" >> "${logPath}"
-            git add -- "${logPath}"
+            if ! {
+              printf '%s' "${requestLogMessages}" >> "${logPath}"
+              git add -- "${logPath}"
+            }
+            then
+              echo "[CRITICAL] ${requestPath}: log file could not be stored."
+
+              exit 1
+            fi
 
             if [[ -n "${responsePath}" ]]
             then
@@ -159,7 +213,12 @@ jobs:
                 commitAddedPaths+="  * \`${responsePath}\`"$'\n'
               fi
 
-              git add -- "${responsePath}"
+              if ! git add -- "${responsePath}"
+              then
+                echo "[CRITICAL] ${requestPath}: response file could not be staged."
+
+                exit 1
+              fi
             fi
 
             if [[ -n "${commitAddedPaths}" ]]
@@ -175,11 +234,21 @@ jobs:
               commitMessageSubject="Adds relay records for \`${requestPath}\`"
             fi
 
-            git commit -S \
+            if ! git commit -S \
               -m "${commitMessageSubject}" \
               -m "${commitMessageBody}"
-            git verify-commit HEAD
-            git push origin "HEAD:${GITHUB_REF}"
+            then
+              echo "[CRITICAL] ${requestPath}: relay records could not be committed."
+
+              exit 1
+            fi
+
+            if ! git push origin "HEAD:${GITHUB_REF}"
+            then
+              echo "[CRITICAL] ${requestPath}: relay records could not be pushed."
+
+              exit 1
+            fi
           }
 
           beforeSha="${{ github.event.before }}"
@@ -204,9 +273,19 @@ jobs:
 
           echo "[INFO] ${GITHUB_REF_NAME}(${shortBeforeSha}..${shortAfterSha}): determining requests"
 
-          mapfile -d '' -t requestChanges < <(
-            git diff --no-renames --name-status -z "${beforeSha}" "${afterSha}" -- 'proxy/*.request'
-          )
+          requestChangesPath="$( mktemp "${RUNNER_TEMP}/freequest-relay-request-changes.XXXXXX" )"
+
+          if ! git diff --no-renames --name-status -z "${beforeSha}" "${afterSha}" -- 'proxy/*.request' > "${requestChangesPath}"
+          then
+            rm -f -- "${requestChangesPath}"
+
+            echo "[CRITICAL] ${GITHUB_REF_NAME}(${shortBeforeSha}..${shortAfterSha}): request changes could not be determined."
+
+            exit 1
+          fi
+
+          mapfile -d '' -t requestChanges < "${requestChangesPath}"
+          rm -f -- "${requestChangesPath}"
 
           for (( requestChangeIndex = 0; requestChangeIndex < ${#requestChanges[@]}; requestChangeIndex += 2 ))
           do
@@ -276,7 +355,12 @@ jobs:
               continue
             fi
 
-            temporaryResponsePath="$( mktemp "${RUNNER_TEMP}/freequest-proxy.response.XXXXXX" )"
+            if ! temporaryResponsePath="$( mktemp "${RUNNER_TEMP}/freequest-proxy.response.XXXXXX" )"
+            then
+              echo "[CRITICAL] ${requestPath}: temporary response file could not be created."
+
+              exit 1
+            fi
 
             trap - ERR
             set +e
@@ -324,7 +408,12 @@ jobs:
 
             httpStatus="${curlOutput##*$'\n'}"
 
-            mv -- "${temporaryResponsePath}" "${responsePath}"
+            if ! mv -- "${temporaryResponsePath}" "${responsePath}"
+            then
+              echo "[CRITICAL] ${requestPath}: response file could not be saved."
+
+              exit 1
+            fi
 
             if [[ "${httpStatus}" =~ ^2[0-9]{2}$ ]]
             then
