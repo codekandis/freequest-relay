@@ -69,6 +69,15 @@ jobs:
             echo "[CRITICAL] \`secrets.FREEQUEST_PROXY_API_KEY\` must be set."
           fi
 
+          echo "[INFO] Validating \`env.RELAY_MAX_CONCURRENT_WORKFLOWS\`."
+
+          if [[ ! "${RELAY_MAX_CONCURRENT_WORKFLOWS}" =~ ^[1-9][0-9]*$ ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`env.RELAY_MAX_CONCURRENT_WORKFLOWS\` must be a positive integer."
+          fi
+
           echo "[INFO] Validating \`env.PROXY_REQUEST_TIMEOUT_SECONDS\`."
 
           if [[ ! "${PROXY_REQUEST_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]
