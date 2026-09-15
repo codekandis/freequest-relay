@@ -1,0 +1,250 @@
+name: Relay – validate preconditions
+
+on:
+  workflow_call:
+    inputs:
+      ci-config-env:
+        required: true
+        type: string
+      environment-name:
+        required: true
+        type: string
+    outputs:
+      SIGNING_KEY_FINGERPRINT:
+        value: ${{ jobs.relay-validate-preconditions.outputs.SIGNING_KEY_FINGERPRINT }}
+      SIGNING_KEY_EMAIL:
+        value: ${{ jobs.relay-validate-preconditions.outputs.SIGNING_KEY_EMAIL }}
+
+jobs:
+  relay-validate-preconditions:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    environment:
+      name: ${{ inputs.environment-name }}
+      deployment: false
+    env: ${{ fromJSON( inputs.ci-config-env ) }}
+    outputs:
+      SIGNING_KEY_FINGERPRINT: ${{ steps.relay-validate-gpg-signing-key.outputs.signingKeyFingerprint }}
+      SIGNING_KEY_EMAIL: ${{ steps.relay-validate-gpg-signing-key.outputs.signingKeyEmail }}
+
+    steps:
+      - name: Validate secrets
+        id: relay-validate-secrets
+        continue-on-error: true
+        shell: bash
+        env:
+          FREEQUEST_RELAY_GPG_PRIVATE_KEY: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY }}
+          FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD }}
+          FREEQUEST_PROXY_ENDPOINT: ${{ secrets.FREEQUEST_PROXY_ENDPOINT }}
+          FREEQUEST_PROXY_CREDENTIALS_HEADER_TEMPLATE: ${{ secrets.FREEQUEST_PROXY_CREDENTIALS_HEADER_TEMPLATE }}
+          FREEQUEST_PROXY_CREDENTIAL: ${{ secrets.FREEQUEST_PROXY_CREDENTIAL }}
+        run: |
+          set -euo pipefail
+
+          validationFailed=false
+
+          echo "[INFO] Validating \`secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY\`."
+
+          if [[ -z "${FREEQUEST_RELAY_GPG_PRIVATE_KEY}" ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY\` must be set."
+          fi
+
+          echo "[INFO] Validating \`secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD\`."
+
+          if [[ -z "${FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD}" ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD\` must be set."
+          fi
+
+          echo "[INFO] Validating \`secrets.FREEQUEST_PROXY_ENDPOINT\`."
+
+          if [[ -z "${FREEQUEST_PROXY_ENDPOINT}" ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`secrets.FREEQUEST_PROXY_ENDPOINT\` must be set."
+          fi
+
+          if [[ -n "${FREEQUEST_PROXY_ENDPOINT}" ]] \
+            && [[ ! "${FREEQUEST_PROXY_ENDPOINT}" =~ ^[[:alpha:]][[:alnum:]+.-]*://(\[[[:xdigit:]:.]+\]|[^[:space:]/:?#]+)(:[0-9]+)?([/?#][^[:space:]]*)?$ ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`secrets.FREEQUEST_PROXY_ENDPOINT\` must be a valid endpoint."
+          fi
+
+          echo "[INFO] Validating \`secrets.FREEQUEST_PROXY_CREDENTIALS_HEADER_TEMPLATE\`."
+
+          if [[ -z "${FREEQUEST_PROXY_CREDENTIALS_HEADER_TEMPLATE}" ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`secrets.FREEQUEST_PROXY_CREDENTIALS_HEADER_TEMPLATE\` must be set."
+          fi
+
+          echo "[INFO] Validating \`secrets.FREEQUEST_PROXY_CREDENTIAL\`."
+
+          if [[ -z "${FREEQUEST_PROXY_CREDENTIAL}" ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`secrets.FREEQUEST_PROXY_CREDENTIAL\` must be set."
+          fi
+
+          if [[ "${validationFailed}" == true ]]
+          then
+            exit 1
+          fi
+
+      - name: Validate configuration
+        id: relay-validate-configuration
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          validationFailed=false
+
+          echo "[INFO] Validating \`env.RELAY_MAX_CONCURRENT_WORKFLOWS\`."
+
+          if [[ ! "${RELAY_MAX_CONCURRENT_WORKFLOWS}" =~ ^[1-9][0-9]*$ ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`env.RELAY_MAX_CONCURRENT_WORKFLOWS\` must be a positive integer."
+          fi
+
+          echo "[INFO] Validating \`env.PROXY_REQUEST_TIMEOUT_SECONDS\`."
+
+          if [[ ! "${PROXY_REQUEST_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`env.PROXY_REQUEST_TIMEOUT_SECONDS\` must be a positive integer."
+          fi
+
+          echo "[INFO] Validating \`env.PROXY_CONTENT_TYPE\`."
+
+          if [[ -z "${PROXY_CONTENT_TYPE}" ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`env.PROXY_CONTENT_TYPE\` must be set."
+          fi
+
+          if [[ "${validationFailed}" == true ]]
+          then
+            exit 1
+          fi
+
+      - name: Validate GPG signing key
+        id: relay-validate-gpg-signing-key
+        if: ${{ always() }}
+        continue-on-error: true
+        shell: bash
+        env:
+          FREEQUEST_RELAY_GPG_PRIVATE_KEY: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY }}
+          FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${FREEQUEST_RELAY_GPG_PRIVATE_KEY}" ]] \
+            || [[ -z "${FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD}" ]]
+          then
+            exit 0
+          fi
+
+          signingKeyMetadata=""
+          signingKeyFingerprint=""
+          signingKeyFingerprintCount=0
+          signingKeyEmail=""
+
+          echo "[INFO] Validating GPG signing key."
+
+          if ! printf '%s' "${FREEQUEST_RELAY_GPG_PRIVATE_KEY}" | gpg --batch --import
+          then
+            echo "[CRITICAL] GPG signing key must be importable."
+
+            exit 1
+          fi
+
+          signingKeyMetadata="$( gpg --batch --with-colons --list-secret-keys )"
+
+          signingKeyFingerprintCount="$(
+            awk -F ':' '
+              $1 == "sec" {
+                isPrimarySecretKey = 1
+
+                next
+              }
+
+              isPrimarySecretKey && $1 == "fpr" {
+                signingKeyFingerprintCount += 1
+                isPrimarySecretKey = 0
+              }
+
+              END {
+                print signingKeyFingerprintCount
+              }
+            ' <<< "${signingKeyMetadata}"
+          )"
+
+          if [[ "${signingKeyFingerprintCount}" != 1 ]]
+          then
+            echo "[CRITICAL] GPG signing key must contain exactly 1 secret key."
+
+            exit 1
+          fi
+
+          signingKeyFingerprint="$(
+            awk -F ':' '
+              $1 == "sec" {
+                isPrimarySecretKey = 1
+
+                next
+              }
+
+              isPrimarySecretKey && $1 == "fpr" {
+                print $10
+
+                exit
+              }
+            ' <<< "${signingKeyMetadata}"
+          )"
+          signingKeyEmail="$(
+            awk -F ':' '$1 == "uid" { sub(/^.*</, "", $10); sub(/>.*$/, "", $10); print $10; exit }' \
+              <<< "${signingKeyMetadata}"
+          )"
+
+          if [[ ! "${signingKeyEmail}" =~ ^[[:alnum:]_%+-]+(\.[[:alnum:]_%+-]+)*@[[:alnum:]]([[:alnum:]-]*[[:alnum:]])?(\.[[:alnum:]]([[:alnum:]-]*[[:alnum:]])?)*$ ]]
+          then
+            echo "[CRITICAL] GPG signing key must contain an email address."
+
+            exit 1
+          fi
+
+          echo "signingKeyFingerprint=${signingKeyFingerprint}" >> "${GITHUB_OUTPUT}"
+          echo "signingKeyEmail=${signingKeyEmail}" >> "${GITHUB_OUTPUT}"
+
+      - name: Fail invalid preconditions
+        if: ${{ always() }}
+        shell: bash
+        env:
+          SECRETS_VALIDATION_OUTCOME: ${{ steps.relay-validate-secrets.outcome }}
+          CONFIGURATION_VALIDATION_OUTCOME: ${{ steps.relay-validate-configuration.outcome }}
+          GPG_SIGNING_KEY_VALIDATION_OUTCOME: ${{ steps.relay-validate-gpg-signing-key.outcome }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${SECRETS_VALIDATION_OUTCOME}" == failure ]] \
+            || [[ "${CONFIGURATION_VALIDATION_OUTCOME}" == failure ]] \
+            || [[ "${GPG_SIGNING_KEY_VALIDATION_OUTCOME}" == failure ]]
+          then
+            exit 1
+          fi

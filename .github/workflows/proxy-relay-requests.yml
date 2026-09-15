@@ -1,0 +1,78 @@
+name: Relay proxy requests
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+    paths:
+      - proxy/*.request
+
+jobs:
+  load-ci-config-env:
+    uses: ./.github/workflows/_load-ci-config-env.yml
+    permissions:
+      contents: read
+
+  determine-environment:
+    needs: load-ci-config-env
+    runs-on: ubuntu-latest
+    env: ${{ fromJSON( needs.load-ci-config-env.outputs.CI_CONFIG_ENV ) }}
+    outputs:
+      RELAY_ENVIRONMENT_NAME: ${{ steps.determine-environment.outputs.relayEnvironmentName }}
+
+    steps:
+      - name: Determine environment
+        id: determine-environment
+        shell: bash
+        env:
+          RELAY_ENVIRONMENT_NAME: ${{ fromJSON( env.RELAY_ENVIRONMENTS_BY_BRANCH )[ github.ref_name ] }}
+        run: |
+          set -euo pipefail
+
+          echo "relayEnvironmentName=${RELAY_ENVIRONMENT_NAME}" >> "${GITHUB_OUTPUT}"
+
+  relay-validate-preconditions:
+    needs:
+      - load-ci-config-env
+      - determine-environment
+    if: ${{ needs.determine-environment.outputs.RELAY_ENVIRONMENT_NAME != '' }}
+    uses: ./.github/workflows/_relay-validate-preconditions.yml
+    permissions:
+      contents: read
+    secrets: inherit
+    with:
+      ci-config-env: ${{ needs.load-ci-config-env.outputs.CI_CONFIG_ENV }}
+      environment-name: ${{ needs.determine-environment.outputs.RELAY_ENVIRONMENT_NAME }}
+
+  relay-determine-concurrency-lane:
+    needs:
+      - load-ci-config-env
+      - determine-environment
+      - relay-validate-preconditions
+    if: ${{ needs.determine-environment.outputs.RELAY_ENVIRONMENT_NAME != '' }}
+    uses: ./.github/workflows/_relay-determine-concurrency-lane.yml
+    permissions:
+      contents: read
+    with:
+      ci-config-env: ${{ needs.load-ci-config-env.outputs.CI_CONFIG_ENV }}
+
+  proxy-relay-requests:
+    needs:
+      - load-ci-config-env
+      - relay-determine-concurrency-lane
+      - determine-environment
+      - relay-validate-preconditions
+    if: ${{ needs.determine-environment.outputs.RELAY_ENVIRONMENT_NAME != '' }}
+    concurrency:
+      group: relay-${{ needs.relay-determine-concurrency-lane.outputs.RELAY_CONCURRENCY_LANE }}
+      queue: max
+    uses: ./.github/workflows/_proxy-relay-requests.yml
+    permissions:
+      contents: write
+    secrets: inherit
+    with:
+      ci-config-env: ${{ needs.load-ci-config-env.outputs.CI_CONFIG_ENV }}
+      environment-name: ${{ needs.determine-environment.outputs.RELAY_ENVIRONMENT_NAME }}
+      signing-key-fingerprint: ${{ needs.relay-validate-preconditions.outputs.SIGNING_KEY_FINGERPRINT }}
+      signing-key-email: ${{ needs.relay-validate-preconditions.outputs.SIGNING_KEY_EMAIL }}

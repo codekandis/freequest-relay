@@ -1,0 +1,31 @@
+name: Relay – determine concurrency lane
+
+on:
+  workflow_call:
+    inputs:
+      ci-config-env:
+        required: true
+        type: string
+    outputs:
+      RELAY_CONCURRENCY_LANE:
+        value: ${{ jobs.relay-determine-concurrency-lane.outputs.RELAY_CONCURRENCY_LANE }}
+
+jobs:
+  relay-determine-concurrency-lane:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env: ${{ fromJSON( inputs.ci-config-env ) }}
+    outputs:
+      RELAY_CONCURRENCY_LANE: ${{ steps.relay-determine-concurrency-lane.outputs.relayConcurrencyLane }}
+
+    steps:
+      - name: Determine concurrency lane
+        id: relay-determine-concurrency-lane
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          relayConcurrencyLane="$(( GITHUB_RUN_ID % RELAY_MAX_CONCURRENT_WORKFLOWS ))"
+
+          echo "relayConcurrencyLane=${relayConcurrencyLane}" >> "${GITHUB_OUTPUT}"
