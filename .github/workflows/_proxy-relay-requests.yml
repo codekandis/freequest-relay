@@ -123,7 +123,8 @@ jobs:
         env:
           FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD }}
           FREEQUEST_PROXY_ENDPOINT: ${{ secrets.FREEQUEST_PROXY_ENDPOINT }}
-          FREEQUEST_PROXY_API_KEY: ${{ secrets.FREEQUEST_PROXY_API_KEY }}
+          FREEQUEST_PROXY_CREDENTIALS_HEADER_TEMPLATE: ${{ secrets.FREEQUEST_PROXY_CREDENTIALS_HEADER_TEMPLATE }}
+          FREEQUEST_PROXY_CREDENTIAL: ${{ secrets.FREEQUEST_PROXY_CREDENTIAL }}
           GITHUB_WORKFLOW_RUN_ID: ${{github.run_id}}.${{github.run_attempt}}
         run: |
           set -euoE pipefail
@@ -362,6 +363,9 @@ jobs:
               exit 1
             fi
 
+            credentialPlaceholder='{{FREEQUEST_PROXY_CREDENTIAL}}'
+            proxyCredentialsHeader="${FREEQUEST_PROXY_CREDENTIALS_HEADER_TEMPLATE//"${credentialPlaceholder}"/"${FREEQUEST_PROXY_CREDENTIAL}"}"
+
             trap - ERR
             set +e
 
@@ -371,7 +375,7 @@ jobs:
                 --show-error \
                 --max-time "${PROXY_REQUEST_TIMEOUT_SECONDS}" \
                 --request POST \
-                --header "Authorization: ApiKey ${FREEQUEST_PROXY_API_KEY}" \
+                --header "${proxyCredentialsHeader}" \
                 --header "Content-Type: ${PROXY_CONTENT_TYPE}" \
                 --header "Content-Length: $( wc -c < "${requestPath}" )" \
                 --data-binary "@${requestPath}" \

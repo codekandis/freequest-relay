@@ -37,7 +37,8 @@ jobs:
           FREEQUEST_RELAY_GPG_PRIVATE_KEY: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY }}
           FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD: ${{ secrets.FREEQUEST_RELAY_GPG_PRIVATE_KEY_PASSWORD }}
           FREEQUEST_PROXY_ENDPOINT: ${{ secrets.FREEQUEST_PROXY_ENDPOINT }}
-          FREEQUEST_PROXY_API_KEY: ${{ secrets.FREEQUEST_PROXY_API_KEY }}
+          FREEQUEST_PROXY_CREDENTIALS_HEADER_TEMPLATE: ${{ secrets.FREEQUEST_PROXY_CREDENTIALS_HEADER_TEMPLATE }}
+          FREEQUEST_PROXY_CREDENTIAL: ${{ secrets.FREEQUEST_PROXY_CREDENTIAL }}
         run: |
           set -euo pipefail
 
@@ -78,13 +79,22 @@ jobs:
             echo "[CRITICAL] \`secrets.FREEQUEST_PROXY_ENDPOINT\` must be a valid endpoint."
           fi
 
-          echo "[INFO] Validating \`secrets.FREEQUEST_PROXY_API_KEY\`."
+          echo "[INFO] Validating \`secrets.FREEQUEST_PROXY_CREDENTIALS_HEADER_TEMPLATE\`."
 
-          if [[ -z "${FREEQUEST_PROXY_API_KEY}" ]]
+          if [[ -z "${FREEQUEST_PROXY_CREDENTIALS_HEADER_TEMPLATE}" ]]
           then
             validationFailed=true
 
-            echo "[CRITICAL] \`secrets.FREEQUEST_PROXY_API_KEY\` must be set."
+            echo "[CRITICAL] \`secrets.FREEQUEST_PROXY_CREDENTIALS_HEADER_TEMPLATE\` must be set."
+          fi
+
+          echo "[INFO] Validating \`secrets.FREEQUEST_PROXY_CREDENTIAL\`."
+
+          if [[ -z "${FREEQUEST_PROXY_CREDENTIAL}" ]]
+          then
+            validationFailed=true
+
+            echo "[CRITICAL] \`secrets.FREEQUEST_PROXY_CREDENTIAL\` must be set."
           fi
 
           if [[ "${validationFailed}" == true ]]
